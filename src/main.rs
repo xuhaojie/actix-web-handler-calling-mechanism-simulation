@@ -284,7 +284,7 @@ fn main() {
 
 	let mut req4 = HttpRequest {
 		method: Method::Delete,
-		path: "/netexist",
+		path: "/notexist",
 		body: "789",
 	};
 	d.dispatch(&req4);
