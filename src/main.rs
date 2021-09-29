@@ -1,3 +1,5 @@
+use std::future::Future;
+use futures::executor;
 pub mod http {
 	#[derive(Copy, Clone, PartialOrd, PartialEq, Debug)]
 	pub enum Method {
@@ -94,53 +96,58 @@ impl Responder for f64 {
 	}
 }
 
-trait HandlerFactory<P, R> {
+trait HandlerFactory<P, R, O> {
 	fn exec(&self, req: &HttpRequest) -> HttpResponse;
 	fn handler(&self) -> Box<dyn Fn(&HttpRequest) -> HttpResponse + '_> {
 		Box::new(move |r| self.exec(r))
 	}
 }
 
-impl<T, R> HandlerFactory<(),R> for T
+impl<T, R, O> HandlerFactory<(),R,O> for T
 	where
-		R: Responder,
 		T: Fn() -> R,
+		R: Future<Output = O>,
+		O: Responder,
 {
 	fn exec(&self, _req: &HttpRequest) -> HttpResponse {
-		(self)().response_to()
+		executor::block_on((self)()).response_to()
+
 	}
 }
 
-impl<T, R, A> HandlerFactory<(A,),R> for T
+impl<T, R, O, A> HandlerFactory<(A,),R,O> for T
 	where
 		T: Fn(A) -> R,
-		R: Responder,
+		R: Future<Output = O>,
+		O: Responder,
 		A: FromRequest,
 {
 	fn exec(&self, req: &HttpRequest) -> HttpResponse {
 		let a = A::from_request(&req);
-		(self)(a).response_to()
+		executor::block_on((self)(a)).response_to()
 	}
 }
 
-impl<T, R, A, B> HandlerFactory<(A, B),R> for T
+impl<T, R, O, A, B> HandlerFactory<(A, B),R,O> for T
 	where
 		T: Fn(A, B) -> R,
-		R: Responder,
+		R: Future<Output = O>,
+		O: Responder,
 		A: FromRequest,
 		B: FromRequest,
 {
 	fn exec(&self, req: &HttpRequest) -> HttpResponse {
 		let a = A::from_request(&req);
 		let b = B::from_request(&req);
-		(*self)(a, b).response_to()
+		executor::block_on((self)(a,b)).response_to()
 	}
 }
 
-impl<T, R, A, B, C> HandlerFactory<(A, B, C),R> for T
+impl<T, R,O, A, B, C> HandlerFactory<(A, B, C),R,O> for T
 	where
 		T: Fn(A, B, C) -> R,
-		R: Responder,
+		R: Future<Output = O>,
+		O: Responder,
 		A: FromRequest,
 		B: FromRequest,
 		C: FromRequest,
@@ -149,7 +156,7 @@ impl<T, R, A, B, C> HandlerFactory<(A, B, C),R> for T
 		let a = A::from_request(&req);
 		let b = B::from_request(&req);
 		let c = C::from_request(&req);
-		(*self)(a, b, c).response_to()
+		executor::block_on((self)(a,b,c)).response_to()
 	}
 }
 
@@ -172,16 +179,17 @@ impl Dispatcher {
 		}
 	}
 
-	pub fn add<H, P, R>(
+	pub fn add<H, P, R, O>(
 		&mut self,
 		method: http::Method,
 		path: &'static str,
 		handler: &'static H,
 	) -> &Self
 		where
-			H: HandlerFactory<P, R> + 'static,
+			H: HandlerFactory<P, R, O> + 'static,
 			P: 'static,
-			R: Responder,
+			R: Future<Output = O>,
+			O: Responder,
 	{
 		//println!("handle route {:?}", method);
 		self.handlers.push(RouteItem {
@@ -209,37 +217,39 @@ impl Dispatcher {
 }
 
 // no parameter, no return value
-fn hello() {
+async fn hello() {
 
 }
 
 // no parameter, return i32
-fn hi() -> i32 {
+async fn hi() -> i32 {
 	2021
 }
 
 // i32 parameter, return i32
-fn login(name: String, password: String) -> String {
+async fn login(name: String, password: String) -> String {
 	format!("{}-{}", name, password)
 }
 
 // String, f64 parameters, return i32
-fn new_user(msg: String, f: f64) -> String {
+async fn new_user(msg: String, f: f64) -> String {
 	msg.clone()
 }
 
 // i32, String parameters, f64 return
-fn logout(i: i32, msg: String) -> f64 {
-	(i as f64)
+async fn logout(i: i32, msg: String) -> f64 {
+	i as f64
 }
 
 // String, f64, i32 parameters, f64 return
-fn list_user(msg: String, f: f64, i: i32) -> f64 {
+async fn list_user(msg: String, f: f64, i: i32) -> f64 {
 	f
 }
 
 fn main() {
+
 	let mut d = Dispatcher::new();
+
 	d.add(http::Method::Get, "/hello", &hello);
 	d.add(http::Method::Get, "/hi", &hi);
 	d.add(http::Method::Get, "/login", &login);
@@ -251,7 +261,8 @@ fn main() {
 	d.dispatch(&HttpRequest::new(Method::Get, "/hi", ""));
 	d.dispatch(&HttpRequest::new(Method::Get,"/login","123"));
 	d.dispatch(&HttpRequest::new(Method::Post,"/users/1","456"));
-	d.dispatch(&HttpRequest::new(Method::Put, "/logout","456"));
+	d.dispatch(&HttpRequest::new(Method::Put, "/logout","321"));
 	d.dispatch(&HttpRequest::new(Method::Delete,"/users","789"));
 	d.dispatch(&HttpRequest::new(Method::Delete, "/not-exist","789"));
+
 }
